@@ -770,6 +770,10 @@ def extract_text(
       text/csv/json/md -> direct read
       pdf              -> pypdf first, Textract fallback if weak/no text
       image/tiff       -> Textract
+
+    Important:
+      Do not attach an attempts list that contains the same dict being returned.
+      That creates a circular reference and breaks json.dumps().
     """
 
     ext = PurePosixPath(local_path).suffix.lower()
@@ -804,28 +808,33 @@ def extract_text(
 
     if ext in TEXT_EXTENSIONS:
         text, meta = extract_text_direct(local_path)
-        attempts.append(meta)
-        meta["attempts"] = attempts
-        return text, "direct_text", meta
+        return text, "direct_text", {
+            **meta,
+            "attempts": [dict(meta)],
+        }
 
     if ext == ".pdf":
-        text, meta = extract_text_pypdf(local_path)
-        attempts.append(meta)
+        pypdf_text, pypdf_meta = extract_text_pypdf(local_path)
+        attempts.append(dict(pypdf_meta))
 
-        if meta.get("ok") and len(text or "") >= min_chars:
-            meta["attempts"] = attempts
-            return text, "pypdf", meta
+        if pypdf_meta.get("ok") and len(pypdf_text or "") >= min_chars:
+            return pypdf_text, "pypdf", {
+                **pypdf_meta,
+                "attempts": attempts,
+            }
 
-        text, meta = extract_text_textract(
+        textract_text, textract_meta = extract_text_textract(
             textract_client,
             bucket=bucket,
             key=key,
         )
-        attempts.append(meta)
+        attempts.append(dict(textract_meta))
 
-        if meta.get("ok"):
-            meta["attempts"] = attempts
-            return text, "textract", meta
+        if textract_meta.get("ok"):
+            return textract_text, "textract", {
+                **textract_meta,
+                "attempts": attempts,
+            }
 
         return "", "none", {
             "ok": False,
@@ -834,16 +843,18 @@ def extract_text(
         }
 
     if ext in {".jpg", ".jpeg", ".png", ".tif", ".tiff"}:
-        text, meta = extract_text_textract(
+        textract_text, textract_meta = extract_text_textract(
             textract_client,
             bucket=bucket,
             key=key,
         )
-        attempts.append(meta)
+        attempts.append(dict(textract_meta))
 
-        if meta.get("ok"):
-            meta["attempts"] = attempts
-            return text, "textract", meta
+        if textract_meta.get("ok"):
+            return textract_text, "textract", {
+                **textract_meta,
+                "attempts": attempts,
+            }
 
         return "", "none", {
             "ok": False,
