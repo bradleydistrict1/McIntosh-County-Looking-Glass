@@ -314,6 +314,14 @@ def upsert_document_version(
     file_size_bytes: int,
     content_type: Optional[str],
 ) -> str:
+    """
+    Upserts a document version.
+
+    Compatibility note:
+    Your existing registry.document_versions table has version_number NOT NULL.
+    This function always supplies version_number and maintains is_current/current_version_id.
+    """
+
     cur.execute(
         """
         SELECT id
@@ -329,11 +337,53 @@ def upsert_document_version(
 
     if row:
         version_id = row["id"]
+
+        cur.execute(
+            """
+            UPDATE registry.document_versions
+            SET is_current = false
+            WHERE document_id = %s
+              AND id <> %s;
+            """,
+            (document_id, version_id),
+        )
+
+        cur.execute(
+            """
+            UPDATE registry.document_versions
+            SET is_current = true
+            WHERE id = %s;
+            """,
+            (version_id,),
+        )
+
     else:
+        cur.execute(
+            """
+            SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version
+            FROM registry.document_versions
+            WHERE document_id = %s;
+            """,
+            (document_id,),
+        )
+
+        next_version = cur.fetchone()["next_version"]
+
+        cur.execute(
+            """
+            UPDATE registry.document_versions
+            SET is_current = false
+            WHERE document_id = %s;
+            """,
+            (document_id,),
+        )
+
         cur.execute(
             """
             INSERT INTO registry.document_versions (
                 document_id,
+                version_number,
+                is_current,
                 s3_bucket,
                 s3_key,
                 sha256_hash,
@@ -342,11 +392,12 @@ def upsert_document_version(
                 etag,
                 last_modified
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, true, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
                 document_id,
+                next_version,
                 bucket,
                 key,
                 sha256_hash,
